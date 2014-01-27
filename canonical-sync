@@ -1,0 +1,288 @@
+#!/bin/bash
+
+containsElement () {
+  local e
+  for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
+  return 1
+}
+
+containsElementFlat () {
+  if [[ `grep ^$1$ $2 | wc -l` > 0 ]]; then
+      return 1
+  else
+      return 0
+  fi
+}
+
+control_c()
+# run if user hits control-c
+{
+  echo -en "\n*** Ouch! Exiting ***\n"
+  cleanup
+  exit $?
+}
+
+cleanup()
+{
+  rm /tmp/*.deb
+  rm /tmp/Packages
+}
+
+usage()
+{
+cat << EOF
+usage: $0 options
+
+This script syncs repositories from Ubuntu Mirrors
+
+OPTIONS:
+   -h      Show this message
+   -c      Sync channel
+   -r      Removes Sync of specified channel
+   -s      Server address (default: archive.ubuntu.com)
+   -p      Server protocol (default: ftp)
+   -l	   Lists available distributions
+   -v      Verbose
+EOF
+}
+
+CHANNELSFILE=~/.canonical-channels
+VERBOSE=0
+SOURCE="archive.ubuntu.com"
+PROTOCOL="ftp"
+CHANNELS=()
+LIST=0
+
+if [ ! -f $CHANNELSFILE ]; then
+	touch $CHANNELSFILE
+fi
+
+while getopts “:hc:s:p:vlr:” OPTION;do
+     case $OPTION in
+         h)
+             usage
+             exit 0
+             ;;
+         c)
+             NEWCHANNELLIST+=($OPTARG)
+             ;;
+         s)
+             SERVER=$OPTARG
+             ;;
+         p)
+             PASSWD=$OPTARG
+             ;;
+         l)	
+             LIST=1
+             ;;
+         v)
+             VERBOSE=1
+             ;;
+         r)  
+             REMOVECHANNELS+=($OPTARG)
+             ;;
+         *)
+             usage
+             exit 0
+             ;;
+     esac
+done
+
+AVAILABLECHANNELS=()
+curl -s $PROTOCOL://$SOURCE/ubuntu/dists/ |awk '{ print $9 }' > /tmp/dirlist
+DISTNUMBER=`cat /tmp/dirlist | wc -l`
+
+while read line ; do
+	CHANNELS+=($line)
+done < $CHANNELSFILE
+
+PROCENT=`expr 100 / $DISTNUMBER`
+STATUS=0
+WHITES="                                                                                                        "
+
+echo 'Reading available channels'
+
+while read dist ; do
+	for (( i = 0; i < $PROCENT; i++ )); do
+		HASHES="$HASHES#"
+		WHITES="${WHITES:1:${#WHITES}-1}"
+	done
+	STATUS=`expr $STATUS + $PROCENT`
+	echo -ne "$HASHES$WHITES ($STATUS%)\r"
+	
+	if [[ "$LASTDIST" != "`echo $dist | cut -f1 -d-`" ]]; then
+	      AVAILABLECHANNELS+=("(p) $dist")
+	fi
+	if containsElement "`echo $dist | cut -f1 -d-`" "${CHANNELS[@]}";then
+	      curl -s $PROTOCOL://$SOURCE/ubuntu/dists/$dist/ |awk '/^drw/' |awk '{ print $9 }' > /tmp/$dist-dirlist
+	      while read repo ; do
+		  curl -s $PROTOCOL://$SOURCE/ubuntu/dists/$dist/$repo/ |awk '/^drw/' |awk '{ print $9 }' | awk '/^binary/' > /tmp/$dist-$repo-dirlist
+		  while read arch ; do
+			AVAILABLECHANNELS+=(" (c) $dist-$repo-$arch")
+		  done < /tmp/$dist-$repo-dirlist
+	      done < /tmp/$dist-dirlist
+	fi
+	LASTDIST=`echo $dist | cut -f1 -d-`
+done < /tmp/dirlist
+echo -ne "$HASHES$WHITES (100%)\r"
+echo ""
+
+
+for CHANNEL in "${NEWCHANNELLIST[@]}"; do
+	if containsElement "(p) $CHANNEL" "${AVAILABLECHANNELS[@]}" || containsElement " (c) $CHANNEL" "${AVAILABLECHANNELS[@]}" ; then
+		if ! containsElement "$CHANNEL" "${CHANNELS[@]}"; then
+		      echo "Adding $CHANNEL to syncronized channels"
+		else
+		      echo "Channel: $CHANNEL is already being syncronized"
+		      for (( i = 0; i < ${#NEWCHANNELLIST[@]}; i++ )); do
+			    if [ "${NEWCHANNELLIST[$i]}" = "${NEWCHANNELLIST}" ]; then
+			 	unset NEWCHANNELLIST[$i]
+			    fi
+		      done
+		fi
+	else
+		echo "Channel: $CHANNEL does not exist, run '$0 -l' to see all available channels"
+		for (( i = 0; i < ${#NEWCHANNELLIST[@]}; i++ )); do
+			 if [ "${NEWCHANNELLIST[$i]}" = "${NEWCHANNELLIST}" ]; then
+			 	unset NEWCHANNELLIST[$i]
+			 fi
+		done
+	fi
+done
+		FILE=0
+for CHANNEL in "${REMOVECHANNELS[@]}"; do
+	for (( i = 0; i < ${#CHANNELS[@]}; i++ )); do
+		if [ "${CHANNELS[$i]}" = "${CHANNEL}" ]; then
+			unset CHANNELS[$i]
+			echo "Remove $CHANNEL from syncronized channels, remember to remove channel manually"
+		fi
+	done
+done
+
+echo -n > $CHANNELSFILE
+for CHANNEL in "${CHANNELS[@]}"; do
+	if ! containsElement "(p) $CHANNEL" "${NEW_CHANNELS[@]}" ; then
+		echo $CHANNEL >> $CHANNELSFILE
+		NEW_CHANNELS+=($CHANNEL)
+	fi
+done
+for CHANNEL in "${NEWCHANNELLIST[@]}"; do
+	if ! containsElement "(p) $CHANNEL" "${NEW_CHANNELS[@]}" ; then
+		echo $CHANNEL >> $CHANNELSFILE
+		NEW_CHANNELS+=($CHANNEL)
+	fi
+done
+
+if [[ $LIST -eq 1 ]]; then
+	echo "Status | Channel Name"
+	echo -n
+
+	for CHANNEL in "${AVAILABLECHANNELS[@]}"; do
+		CHANNELNAME=`echo $CHANNEL|awk '{ print $NF }'`
+		if `containsElement "$CHANNELNAME" "${NEW_CHANNELS[@]}"`;then
+			echo "Sync     $CHANNEL"
+		else
+			echo "         $CHANNEL"
+		fi
+	done
+
+	exit 0
+fi
+
+SPACEWALKCHANNELS=(`spacecmd softwarechannel_list`)
+
+trap control_c SIGINT
+
+for CHANNEL in "${NEW_CHANNELS[@]}"; do
+	echo "Syncing channel: $CHANNEL"
+	DISTNAME=`echo $CHANNEL |cut -f1 -d-`
+	curl -s $PROTOCOL://$SOURCE/ubuntu/dists/$DISTNAME/Release > /tmp/releaseinfo
+	VERSION=`cat /tmp/releaseinfo |grep Version: | cut -f2 -d: | sed 's/ //g'`
+	CHANNELEXT=`echo $CHANNEL|cut -f2- -d-`
+	CHANNELNAME=`cat /tmp/releaseinfo |grep Description: | cut -f2 -d:`
+	if [[ $CHANNELEXT == $CHANNEL ]]; then
+	      CHANNELEXT=""
+	      CHANNELLABEL="ubuntu-$VERSION-$DISTNAME"
+	else
+	      CHANNELLABEL="ubuntu-$VERSION-$DISTNAME-$CHANNELEXT"
+	      CHANNELNAME="$CHANNELNAME - `echo $CHANNELEXT | cut -f-2 -d-`"
+	fi
+
+	if [[ $CHANNELEXT == "" ]];then
+		if ! `containsElement "$CHANNELLABEL-i386" "${SPACEWALKCHANNELS[@]}"`;then
+			echo "Creating channel: $CHANNELLABEL-i386"
+			spacecmd softwarechannel_create -- -n "$CHANNELNAME 32-bit" -l "$CHANNELLABEL-i386" -a ia32-deb
+		fi
+		if ! `containsElement "$CHANNELLABEL-amd64" "${SPACEWALKCHANNELS[@]}"`;then
+			echo "Creating channel: $CHANNELLABEL-amd64"
+			spacecmd softwarechannel_create -- -n "$CHANNELNAME 64-bit" -l "$CHANNELLABEL-amd64" -a amd64-deb
+		fi
+	else
+		ARCH=`echo $CHANNELEXT |awk -F- '{print $NF}'`
+		if [[ $ARCH == "i386" ]];then
+			ARCHNAME="32-bit"
+			SPWARCH="ia32-deb"
+		elseojea5Qui
+			ARCHNAME="64-bit"
+			SPWARCH="amd64-deb"
+		fi
+		if ! `containsElement "$CHANNELLABEL" "${SPACEWALKCHANNELS[@]}"`;then
+			echo "Creating channel: $CHANNELLABEL"
+			spacecmd softwarechannel_create -- -p "ubuntu-$VERSION-$DISTNAME-$ARCH" -n "`echo $CHANNELNAME-$ARCHNAME |cut -f1,2 -d-`" -l "$CHANNELLABEL" -a $SPWARCH
+		fi
+	
+		CHANNELPACKAGES=(`spacecmd softwarechannel_listallpackages $CHANNELLABEL`)
+		
+		spacecmd softwarechannel_listallpackages $CHANNELLABEL > /tmp/channelpackages.db
+		
+		if [[ `tr -dc '-' <<< "$CHANNELEXT" | wc -c` == 2 ]]; then
+			wget -q -O /tmp/Packages.bz2 $PROTOCOL://$SOURCE/ubuntu/dists/$DISTNAME/`echo $CHANNELEXT |cut -f1 -d-`/`echo $CHANNELEXT |cut -f2,3 -d-`/Packages.bz2
+		else
+			wget -q -O /tmp/Packages.bz2 $PROTOCOL://$SOURCE/ubuntu/dists/$DISTNAME-`echo $CHANNELEXT |cut -f1 -d-`/`echo $CHANNELEXT |cut -f2 -d-`/`echo $CHANNELEXT |cut -f3,4 -d-`/Packages.bz2
+		fi
+
+		rm -rf "/tmp/Packages"
+		bunzip2 /tmp/Packages.bz2
+		FILENAMES=(`cat /tmp/Packages | grep "^Filename:" | awk '{ print $2 }'`)
+		MD5S=(`cat /tmp/Packages | grep "^MD5sum:" | awk '{ print $2 }'`)
+		VERSIONS=(`cat /tmp/Packages | grep "^Version:" | cut -f2- -d":"  |sed -e 's/^ *//g' -e 's/ *$//g'`)
+		PACKAGES=(`cat /tmp/Packages | grep "^Package:" | awk '{ print $2 }'`)
+		echo "Syncing ${#FILENAMES[@]} packages"
+		
+		for ((POS=0; POS < ${#FILENAMES[@]} ; POS++)); do
+			echo "Syncing `expr $POS + 1` out of ${#FILENAMES[@]} packages"
+			FILENAME=`echo ${FILENAMES[$POS]} | awk -F/ '{ print $NF  }'`
+			if [[ `echo ${VERSIONS[$POS]} | grep "-" |wc -l` == "0" ]];then
+				VERSION="${VERSIONS[$POS]}-X"
+			else
+				VERSION=${VERSIONS[$POS]}
+			fi
+
+			VERSION=`echo $VERSION |cut -f1,2 -d"-"`
+
+			if [[ `echo ${FILENAME##*_} |cut -f1 -d.` == "all"  ]];then
+				SPWFILENAME="${PACKAGES[$POS]}-$VERSION.all-deb"
+			else
+				SPWFILENAME="${PACKAGES[$POS]}-$VERSION.$ARCH-deb"
+			fi
+			
+			echo $FILENAME
+			if ! `containsElementFlat "$SPWFILENAME" "/tmp/channelpackages.db"`;then
+				echo "Downloading Package"
+				wget -q -O /tmp/$FILENAME $PROTOCOL://$SOURCE/ubuntu/${FILENAMES[$POS]}
+				MD5=`md5sum /tmp/$FILENAME | awk '{ print $1 }'`
+				if [[ $MD5 == ${MD5S[$POS]} ]];then
+					rhnpush -c $CHANNELLABEL /tmp/$FILENAME
+				else
+					echo "MD5SUM Mitchmatch: |$MD5|, should have been: |${MD5S[$POS]}|"
+				fi
+				rm -rf "/tmp/$FILENAME"
+			else
+				echo "Package is already downloaded"
+			fi 
+			echo
+		done
+		
+	fi
+
+done
