@@ -8,9 +8,9 @@ containsElement () {
 
 containsElementFlat () {
   if [[ `grep ^$1$ $2 | wc -l` > 0 ]]; then
-      return 1
-  else
       return 0
+  else
+      return 1
   fi
 }
 
@@ -195,6 +195,8 @@ trap control_c SIGINT
 
 for CHANNEL in "${NEW_CHANNELS[@]}"; do
 	echo "Syncing channel: $CHANNEL"
+	echo
+
 	DISTNAME=`echo $CHANNEL |cut -f1 -d-`
 	curl -s $PROTOCOL://$SOURCE/ubuntu/dists/$DISTNAME/Release > /tmp/releaseinfo
 	VERSION=`cat /tmp/releaseinfo |grep Version: | cut -f2 -d: | sed 's/ //g'`
@@ -205,7 +207,7 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 	      CHANNELLABEL="ubuntu-$VERSION-$DISTNAME"
 	else
 	      CHANNELLABEL="ubuntu-$VERSION-$DISTNAME-$CHANNELEXT"
-	      CHANNELNAME="$CHANNELNAME - `echo $CHANNELEXT | cut -f-2 -d-`"
+	      CHANNELNAME="$CHANNELNAME - `echo $CHANNELEXT | sed 's/-binary-amd64//g' | sed 's/-binary-i386//g'`"
 	fi
 
 	if [[ $CHANNELEXT == "" ]];then
@@ -222,13 +224,13 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 		if [[ $ARCH == "i386" ]];then
 			ARCHNAME="32-bit"
 			SPWARCH="ia32-deb"
-		elseojea5Qui
+		else
 			ARCHNAME="64-bit"
 			SPWARCH="amd64-deb"
 		fi
 		if ! `containsElement "$CHANNELLABEL" "${SPACEWALKCHANNELS[@]}"`;then
 			echo "Creating channel: $CHANNELLABEL"
-			spacecmd softwarechannel_create -- -p "ubuntu-$VERSION-$DISTNAME-$ARCH" -n "`echo $CHANNELNAME-$ARCHNAME |cut -f1,2 -d-`" -l "$CHANNELLABEL" -a $SPWARCH
+			spacecmd softwarechannel_create -- -p "ubuntu-$VERSION-$DISTNAME-$ARCH" -n "`echo $CHANNELNAME-$ARCHNAME`" -l "$CHANNELLABEL" -a $SPWARCH
 		fi
 	
 		CHANNELPACKAGES=(`spacecmd softwarechannel_listallpackages $CHANNELLABEL`)
@@ -248,9 +250,10 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 		VERSIONS=(`cat /tmp/Packages | grep "^Version:" | cut -f2- -d":"  |sed -e 's/^ *//g' -e 's/ *$//g'`)
 		PACKAGES=(`cat /tmp/Packages | grep "^Package:" | awk '{ print $2 }'`)
 		echo "Syncing ${#FILENAMES[@]} packages"
-		
+		echo
+
 		for ((POS=0; POS < ${#FILENAMES[@]} ; POS++)); do
-			echo "Syncing `expr $POS + 1` out of ${#FILENAMES[@]} packages"
+			echo -ne "Syncing `expr $POS + 1` out of ${#FILENAMES[@]} packages\r"
 			FILENAME=`echo ${FILENAMES[$POS]} | awk -F/ '{ print $NF  }'`
 			if [[ `echo ${VERSIONS[$POS]} | grep "-" |wc -l` == "0" ]];then
 				VERSION="${VERSIONS[$POS]}-X"
@@ -266,9 +269,9 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 				SPWFILENAME="${PACKAGES[$POS]}-$VERSION.$ARCH-deb"
 			fi
 			
-			echo $FILENAME
+			#echo $FILENAME
 			if ! `containsElementFlat "$SPWFILENAME" "/tmp/channelpackages.db"`;then
-				echo "Downloading Package"
+			#	echo "Downloading Package"
 				wget -q -O /tmp/$FILENAME $PROTOCOL://$SOURCE/ubuntu/${FILENAMES[$POS]}
 				MD5=`md5sum /tmp/$FILENAME | awk '{ print $1 }'`
 				if [[ $MD5 == ${MD5S[$POS]} ]];then
@@ -278,11 +281,11 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 				fi
 				rm -rf "/tmp/$FILENAME"
 			else
-				echo "Package is already downloaded"
+			#	echo "Package is already downloaded"
+				STATUS="downloaded"
 			fi 
-			echo
 		done
-		
+		echo 
 	fi
 
 done
