@@ -189,7 +189,7 @@ if [[ $LIST -eq 1 ]]; then
 	exit 0
 fi
 
-SPACEWALKCHANNELS=(`spacecmd softwarechannel_list`)
+SPACEWALKCHANNELS=(`spacecmd -q softwarechannel_list`)
 
 trap control_c SIGINT
 
@@ -213,11 +213,11 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 	if [[ $CHANNELEXT == "" ]];then
 		if ! `containsElement "$CHANNELLABEL-i386" "${SPACEWALKCHANNELS[@]}"`;then
 			echo "Creating channel: $CHANNELLABEL-i386"
-			spacecmd softwarechannel_create -- -n "$CHANNELNAME 32-bit" -l "$CHANNELLABEL-i386" -a ia32-deb
+			spacecmd -q softwarechannel_create -- -n "$CHANNELNAME 32-bit" -l "$CHANNELLABEL-i386" -a ia32-deb
 		fi
 		if ! `containsElement "$CHANNELLABEL-amd64" "${SPACEWALKCHANNELS[@]}"`;then
 			echo "Creating channel: $CHANNELLABEL-amd64"
-			spacecmd softwarechannel_create -- -n "$CHANNELNAME 64-bit" -l "$CHANNELLABEL-amd64" -a amd64-deb
+			spacecmd -q softwarechannel_create -- -n "$CHANNELNAME 64-bit" -l "$CHANNELLABEL-amd64" -a amd64-deb
 		fi
 	else
 		ARCH=`echo $CHANNELEXT |awk -F- '{print $NF}'`
@@ -230,12 +230,12 @@ for CHANNEL in "${NEW_CHANNELS[@]}"; do
 		fi
 		if ! `containsElement "$CHANNELLABEL" "${SPACEWALKCHANNELS[@]}"`;then
 			echo "Creating channel: $CHANNELLABEL"
-			spacecmd softwarechannel_create -- -p "ubuntu-$VERSION-$DISTNAME-$ARCH" -n "`echo $CHANNELNAME-$ARCHNAME`" -l "$CHANNELLABEL" -a $SPWARCH
+			spacecmd -q softwarechannel_create -- -p "ubuntu-$VERSION-$DISTNAME-$ARCH" -n "`echo $CHANNELNAME-$ARCHNAME`" -l "$CHANNELLABEL" -a $SPWARCH
 		fi
 	
-		CHANNELPACKAGES=(`spacecmd softwarechannel_listallpackages $CHANNELLABEL`)
+		CHANNELPACKAGES=(`spacecmd -q softwarechannel_listallpackages $CHANNELLABEL`)
 		
-		spacecmd softwarechannel_listallpackages $CHANNELLABEL > /tmp/channelpackages.db
+		spacecmd -q softwarechannel_listallpackages $CHANNELLABEL > /tmp/channelpackages.db
 		
 		if [[ `tr -dc '-' <<< "$CHANNELEXT" | wc -c` == 2 ]]; then
 			wget -q -O /tmp/Packages.bz2 $PROTOCOL://$SOURCE/ubuntu/dists/$DISTNAME/`echo $CHANNELEXT |cut -f1 -d-`/`echo $CHANNELEXT |cut -f2,3 -d-`/Packages.bz2
