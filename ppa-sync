@@ -1,169 +1,293 @@
 #!/bin/bash
 
+#
+# FILE: ppa-sync
+#
+# USAGE: ppa-sync [-h] [-A ppa] [-a channel] [-r channel] [-c channel] [-l] [-v]
+#
+# DESCRIPTION: Update SpaceWalk software channels from PPA
+#
+# OPTIONS: see function ’usage’ below
+# AUTHOR: Martin Juhl, mj@casalogic.dk
+# Author: Søren Timmerman, st@casalogic.dk
+# COMPANY: Casalogic A/S
+
 CONFIG=~/.ppa-sync-ppas
 SYNCS=~/.ppa-sync-syncs
 
 AVAILABLECHANNELS=()
 
 containsElement () {
-  local e
-  for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
-  return 1
+    local e
+    for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
+    return 1
 }
 
-usage()
-{
-cat << EOF
+containsElementFlat () {
+  if [[ `grep ^$1$ $2 | wc -l` > 0 ]]; then
+      return 0
+  else
+      return 1
+  fi
+}
+
+escape_sed () {
+    sed \
+        -e 's/\//\\\//g' \
+        -e 's/\&/\\\&/g'
+}
+
+usage() {
+    cat << EOF
 usage: $0 options
 
-This script syncs repositories from Ubuntu Mirrors
+This script syncs repositories from Ubuntu PPA Mirrors
 
 OPTIONS:
-   -h      Show this message
-   -A      Add PPA (ppa:<user>/<ppa>)
-   -a      Sync channel
-   -r      Removes Sync of channel
-   -R      Remove PPA (ppa:<user>/<ppa>)
-   -c      Specify Channel to sync to
-   -l	   Lists available channels
-   -v      Verbose
+    -h      Show this message
+    -A      Add PPA (ppa:<user>/<ppa>)
+    -a      Sync channel
+    -r      Removes Sync of channel
+    -R      Remove PPA (ppa:<user>/<ppa>)
+    -c      Specify Channel to sync to
+    -V      Ubuntu version to sync packages for
+    -l      Lists available channels
+    -v      Verbose
 EOF
 }
 
 if [ ! -f $CONFIG ]; then
-	touch $CONFIG
+    touch $CONFIG
 fi
 
-while getopts “:ha:A:vlr:R:c:” OPTION;do
-     case $OPTION in
-         h)
-             usage
-             exit 0
-             ;;
-         A)
-             ADDPPA=$OPTARG
-	     ACTION="ADDPPA"
-             ;;
-         a)
-             ADDCHANNEL=$OPTARG
-             ACTION="ADDCHANNEL"
-             ;;
-         R)
-             RMPPA=$OPTARG
-             ACTION="RMPPA"
-             ;;
-         r)
-             RMCHANNEL=$OPTARG
-             ACTION="RMCHANNEL"
-             ;;
-         c)
-             SYNCCHANNEL=$OPTARG
-             ;;
-         l)	
-             ACTION="LIST"
-             ;;
-         v)
-             VERBOSE=1
-             ;;
-         *)
-             usage
-             exit 0
-             ;;
-     esac
+while getopts “:ha:A:vlr:V:R:c:x:” OPTION;do
+    case $OPTION in
+        h)
+            usage
+            exit 0
+            ;;
+        A)
+            ADDPPA=$OPTARG
+            ACTION="ADDPPA"
+            ;;
+        a)
+            ADDCHANNEL=$OPTARG
+            ACTION="ADDCHANNEL"
+            ;;
+        R)
+            RMPPA=$OPTARG
+            ACTION="RMPPA"
+            ;;
+        r)
+            RMCHANNEL=$OPTARG
+            ACTION="RMCHANNEL"
+            ;;
+        c)
+            SYNCCHANNEL=$OPTARG
+            ;;
+        l)
+            ACTION="LIST"
+            ;;
+        V)
+            SYNCVERSION=$OPTARG
+            ;;
+        v)
+            VERBOSE=1
+            ;;
+        x)
+            SYNCARCH=$OPTARG
+            ;;
+        *)
+            usage
+            exit 0
+            ;;
+    esac
 done
 
-while read PPA ; do
-	
-	    PPAPATH=`echo $PPA | sed 's/ppa://g'`
-	    AVAILABLECHANNELS+=("##########################")
-	    AVAILABLECHANNELS+=("$PPAPATH:")
-	    AVAILABLECHANNELS+=("##########################")
-	    
-	    PPAFILE=ppa-`echo $PPAPATH | sed 's/\//-/g'`-dirlist
-	    
-	    curl -s http://ppa.launchpad.net/$PPAPATH/ubuntu/dists/ |grep DIR | cut -f7 -d\> | cut -f1 -d\< | sed 's/\///g' |grep -v "Parent Directory" > /tmp/$PPAFILE
-	    
-	    while read dist ; do
-		  
-		  curl -s http://ppa.launchpad.net/$PPAPATH/ubuntu/dists/$dist/ |grep DIR | cut -f7 -d\> | cut -f1 -d\< | sed 's/\///g' |grep -v "Parent Directory" > /tmp/$dist-$PPAFILE
-		  
-		  while read repo ; do
-		  
-			curl -s http://ppa.launchpad.net/$PPAPATH/ubuntu/dists/$dist/$repo/ |grep DIR | cut -f7 -d\> | cut -f1 -d\< | sed 's/\///g' |grep -v "Parent Directory" > /tmp/$dist-$repo-$PPAFILE
-			
-			while read arch ; do
-			
-			      AVAILABLECHANNELS+=($PPAPATH:$dist-$repo-$arch)
-			      
-			done < /tmp/$dist-$repo-$PPAFILE
-		  
-		  done < /tmp/$dist-$PPAFILE
-		  
-	    done < /tmp/$PPAFILE
-	
-done < $CONFIG
+getchannels() {
+    while read PPA ; do
+        PPAPATH=`echo $PPA | sed 's/ppa://g'`
+        PPAFILE=ppa-`echo $PPAPATH | sed 's/\//-/g'`-dirlist
 
+        curl -s http://ppa.launchpad.net/$PPAPATH/ubuntu/dists/ |grep DIR | cut -f7 -d\> | cut -f1 -d\< | sed 's/\///g' |grep -v "Parent Directory" > /tmp/$PPAFILE
+
+        while read dist ; do
+            curl -s http://ppa.launchpad.net/$PPAPATH/ubuntu/dists/$dist/ |grep DIR | cut -f7 -d\> | cut -f1 -d\< | sed 's/\///g' |grep -v "Parent Directory" > /tmp/$dist-$PPAFILE
+            while read repo ; do
+                curl -s http://ppa.launchpad.net/$PPAPATH/ubuntu/dists/$dist/$repo/ |grep DIR | cut -f7 -d\> | cut -f1 -d\< | sed 's/\///g' |grep -v "Parent Directory" > /tmp/$dist-$repo-$PPAFILE
+                while read arch ; do
+                    AVAILABLECHANNELS+=($PPAPATH:$dist-$repo-$arch)
+                done < /tmp/$dist-$repo-$PPAFILE
+            done < /tmp/$dist-$PPAFILE
+        done < /tmp/$PPAFILE
+    done < $CONFIG
+}
+getchannels
 
 case $ACTION in
-
     "ADDPPA")
-	
-	echo $ADDPPA | grep -q '^ppa:\+\.*.\+\/\+\.*.'
-	STATUS=$?
-	if [[ $STATUS == "0" ]]; then
-	    PPAPATH=`echo $ADDPPA | sed 's/ppa://g'`
-	    wget -q -O /tmp/ppa-test http://ppa.launchpad.net/$PPAPATH
-	    STATUS=$?
-	    if [[ $STATUS == "0" ]]; then
-		REGEX="^$ADDPPA$"
-		cat $CONFIG | grep -q $REGEX
-		STATUS=$?
-		if [[ $STATUS == "0" ]];then
-		    echo "$ADDPPA: is already added"
-		else
-		    echo $ADDPPA >> $CONFIG
-		    echo "$ADDPPA: was added."
-		
-		fi
-	    else
-		echo "$ADDPPA: doesn't exist at launchpad.net"
-	    fi
-	else
-	    echo "$ADDPPA: is an invalid PPA format, please specify as: ppa:<user>/<ppa>"
-	fi
-	
+    echo $ADDPPA | grep -q '^ppa:\+\.*.\+\/\+\.*.'
+        STATUS=$?
+        if [[ $STATUS == "0" ]]; then
+            PPAPATH=`echo $ADDPPA | sed 's/ppa://g'`
+            wget -q -O /tmp/ppa-test http://ppa.launchpad.net/$PPAPATH
+            STATUS=$?
+            if [[ $STATUS == "0" ]]; then
+                REGEX="^$ADDPPA$"
+                cat $CONFIG | grep -q $REGEX
+                STATUS=$?
+                if [[ $STATUS == "0" ]]; then
+                    echo "$ADDPPA: is already added"
+                else
+                    echo $ADDPPA >> $CONFIG
+                    echo "$ADDPPA: was added"
+                fi
+            else
+                echo "$ADDPPA: doesn't exist at launchpad.net"
+            fi
+        else
+           echo "$ADDPPA: is an invalid PPA format, please specify as: ppa:<user>/<ppa>"
+        fi
     ;;
+
     "RMPPA")
-	
+        REGEX="^$RMPPA$"
+        cat $CONFIG | grep -q $REGEX
+        STATUS=$?
+        if [[ $STATUS == "0" ]]; then
+            REGEX=$(echo $REGEX |sed -e 's/\//\\\//g' -e 's/\&/\\\&/g')
+            sed -i "/"$REGEX"/d" $CONFIG
+            echo "$RMPPA: was removed"
+        else
+            echo "$RMPPA: doesn't exist in config"
+        fi
     ;;
+
     "LIST")
-	
-	for CHANNEL in "${AVAILABLECHANNELS[@]}"; do
-	    echo "$CHANNEL"
-	done
-    
+        for CHANNEL in "${AVAILABLECHANNELS[@]}"; do
+            echo "$CHANNEL"
+        done
     ;;
-    
+
     "ADDCHANNEL")
-    
-	if containsElement "$ADDCHANNEL" "${AVAILABLECHANNELS[@]}"; then
-	    if [[ $SYNCCHANNEL == "" ]];then
-		echo "Please define the channel to sync to ( -c parameter )"
-	    else
-		REGEX="'^$SYNCCHANNEL$"
-		spacecmd -q softwarechannel_list |grep -q $REGEX
-		if [[ $? != "0" ]]; then
-		    echo "Sync channel does not exist"
-		else
-		    echo "Adding $ADDCHANNEL to sync"
-		    echo "$ADDCHANNEL%$SYNCCHANNEL" >> $SYNCS
-		fi
-	    fi
-	    
-	else
-	    echo "Unknown channel"
-	fi
+        if containsElement "$ADDCHANNEL" "${AVAILABLECHANNELS[@]}"; then
+            if [[ $SYNCCHANNEL == "" ]]; then
+                echo "Please define the channel to sync to ( -c parameter )"
+            else
+                REGEX="'^$SYNCCHANNEL$"
+                echo spacecmd -q softwarechannel_list |grep -q $REGEX
+                if [[ $? != "0" ]]; then
+                    echo "Sync channel does not exist"
+                else
+                    echo "Adding $ADDCHANNEL to sync"
+                    echo "$ADDCHANNEL%$SYNCCHANNEL" >> $SYNCS
+                fi
+            fi
+        else
+            echo "Unknown channel"
+        fi
     ;;
-    
-    
 esac
+
+sync_channel() {
+    USER=`echo $CHANNEL |cut -f1 -d'/'`
+    CHANNEL=`echo $CHANNEL |cut -f2 -d'/'`
+    REPO=`echo $CHANNEL |cut -f1 -d':'`
+    CHANNEL=`echo $CHANNEL |cut -f2 -d':'`
+    DISTNAME=`echo $CHANNEL |cut -f1 -d-`
+    URL=http://ppa.launchpad.net/$USER/$REPO/ubuntu/dists/$DISTNAME/Release
+    curl -s $URL > /tmp/releaseinfo
+    VERSION=`cat /tmp/releaseinfo |grep Version: | cut -f2 -d: | sed 's/ //g'`
+    CHANNELEXT=`echo $CHANNEL|cut -f2- -d-`
+    CHANNELNAME=`cat /tmp/releaseinfo |grep Description: | cut -f2 -d:`
+    ARCH=`echo $CHANNELEXT |awk -F- '{print $NF}'`
+
+    # we only want supported architectures
+    if ! `containsElement "i386" "$ARCH"` && ! `containsElement "amd64" "$ARCH"`; then
+        continue
+    fi
+
+    # skip architectures not selected for sync
+    if [[ ! -z "$SYNCARCH" && $SYNCARCH != $ARCH ]]; then
+        continue;
+    fi
+
+    # skip versions not requested to be synced
+    if [[ $VERSION != $SYNCVERSION ]]; then
+        continue
+    fi
+
+    echo "Syncing channel: $CHANNEL from ppa:$USER:$REPO"
+    SPACEWALKCHANNELS=(`spacecmd softwarechannel_list 2>/dev/null`)
+    CHANNELLABEL=`echo ubuntu-"$VERSION"-"$DISTNAME"-"$CHANNELEXT"_ppa_"$USER"_"$REPO"`
+    CHANNELNAME=`echo "$CHANNELNAME" - PPA "$USER"/"$REPO"`
+
+    ARCH=`echo $CHANNELEXT |awk -F- '{print $NF}'`
+    if [[ $ARCH == "i386" ]];then
+        ARCHNAME="32-bit"
+        SPWARCH="ia32-deb"
+    else
+        ARCHNAME="64-bit"
+        SPWARCH="amd64-deb"
+    fi
+    if ! `containsElement "$CHANNELLABEL" "${SPACEWALKCHANNELS[@]}"`;then
+        echo "Creating channel: $CHANNELLABEL"
+        spacecmd softwarechannel_create -- -p "ubuntu-$VERSION-$DISTNAME-$ARCH" -n "`echo $CHANNELNAME-$ARCHNAME`" -l "$CHANNELLABEL" -a $SPWARCH
+    fi
+
+    CHANNELPACKAGES=(`spacecmd softwarechannel_listallpackages $CHANNELLABEL`)
+    spacecmd softwarechannel_listallpackages $CHANNELLABEL > /tmp/channelpackages.db
+    if [[ `tr -dc '-' <<< "$CHANNELEXT" | wc -c` == 2 ]]; then
+        wget -q -O /tmp/Packages.bz2 http://ppa.launchpad.net/$USER/$REPO/ubuntu/dists/$DISTNAME/`echo $CHANNELEXT |cut -f1 -d-`/`echo $CHANNELEXT |cut -f2,3 -d-`/Packages.bz2
+    else
+        wget -q -O /tmp/Packages.bz2 http://ppa.launchpad.net/$USER/$REPO/ubuntu/dists/$DISTNAME-`echo $CHANNELEXT |cut -f1 -d-`/`echo $CHANNELEXT |cut -f2 -d-`/`echo $CHANNELEXT |cut -f3,4 -d-`/Packages.bz2
+    fi
+
+    rm -rf "/tmp/Packages"
+    bunzip2 /tmp/Packages.bz2
+    FILENAMES=(`cat /tmp/Packages | grep "^Filename:" | awk '{ print $2 }'`)
+    MD5S=(`cat /tmp/Packages | grep "^MD5sum:" | awk '{ print $2 }'`)
+    VERSIONS=(`cat /tmp/Packages | grep "^Version:" | cut -f2- -d":"  |sed -e 's/^ *//g' -e 's/ *$//g'`)
+    PACKAGES=(`cat /tmp/Packages | grep "^Package:" | awk '{ print $2 }'`)
+    echo "Syncing ${#FILENAMES[@]} packages"
+
+    for ((POS=0; POS < ${#FILENAMES[@]} ; POS++)); do
+        echo -ne "Syncing `expr $POS + 1` out of ${#FILENAMES[@]} packages\r"
+        FILENAME=`echo ${FILENAMES[$POS]} | awk -F/ '{ print $NF  }'`
+        if [[ `echo ${VERSIONS[$POS]} | grep "-" |wc -l` == "0" ]];then
+            VERSION="${VERSIONS[$POS]}-X"
+        else
+            VERSION=${VERSIONS[$POS]}
+        fi
+
+        VERSION=`echo $VERSION |cut -f1,2 -d"-"`
+
+        if [[ `echo ${FILENAME##*_} |cut -f1 -d.` == "all"  ]];then
+            SPWFILENAME="${PACKAGES[$POS]}-$VERSION.all-deb"
+        else
+            SPWFILENAME="${PACKAGES[$POS]}-$VERSION.$ARCH-deb"
+        fi
+
+        if ! `containsElementFlat "$SPWFILENAME" "/tmp/channelpackages.db"`;then
+            # echo "Downloading Package" if $VERBOSE
+            wget -q -O /tmp/$FILENAME http://ppa.launchpad.net/$USER/$REPO/ubuntu/${FILENAMES[$POS]}
+            MD5=`md5sum /tmp/$FILENAME | awk '{ print $1 }'`
+            echo $FILENAME
+            if [[ $MD5 == ${MD5S[$POS]} ]];then
+                rhnpush -c $CHANNELLABEL /tmp/$FILENAME
+            else
+                echo "MD5SUM Mitchmatch: |$MD5|, should have been: |${MD5S[$POS]}|"
+            fi
+            rm -rf "/tmp/$FILENAME"
+        else
+            #echo "Package is already downloaded" if $VERBOSE
+            STATUS="downloaded"
+        fi
+    done
+
+    echo
+}
+
+for CHANNEL in "${AVAILABLECHANNELS[@]}"; do
+    sync_channel $CHANNEL
+done
