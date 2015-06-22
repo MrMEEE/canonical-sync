@@ -175,7 +175,7 @@ case $ACTION in
                 echo "Please define the channel to sync to ( -c parameter )"
             else
                 REGEX="'^$SYNCCHANNEL$"
-                echo spacecmd -q softwarechannel_list |grep -q $REGEX
+                spacecmd -q softwarechannel_list |grep -q $REGEX
                 if [[ $? != "0" ]]; then
                     echo "Sync channel does not exist"
                 else
@@ -219,7 +219,9 @@ sync_channel() {
 
     echo "Syncing channel: $CHANNEL from ppa:$USER:$REPO"
     SPACEWALKCHANNELS=(`spacecmd softwarechannel_list 2>/dev/null`)
-    CHANNELLABEL=`echo ubuntu-"$VERSION"-"$DISTNAME"-"$CHANNELEXT"_ppa_"$USER"_"$REPO"`
+    USERNAME=`echo $USER |sed 's/-/_/g'`
+    REPONAME=`echo $REPO |sed 's/-/_/g'`
+    CHANNELLABEL=`echo ubuntu-"$VERSION"-"$DISTNAME"-ppa-"$USERNAME"-"$REPONAME"-"$ARCH"`
     CHANNELNAME=`echo "$CHANNELNAME" - PPA "$USER"/"$REPO"`
 
     ARCH=`echo $CHANNELEXT |awk -F- '{print $NF}'`
